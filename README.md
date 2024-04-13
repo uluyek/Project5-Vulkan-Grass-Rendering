@@ -66,7 +66,7 @@ t = 0.5 + (u − 0.5) (1 − max(v−τ,0)/1−τ) for blade geometry
 | All Culling On                | 8-20        | 11960    | 10630     | 7500      | 2700      | 890       | 245       | 64        |
 
 **Reference Chart**
-!()[]
+![](https://github.com/uluyek/Project5-Vulkan-Grass-Rendering/blob/main/565%20performance%20analysis.jpg)
 
 
 
