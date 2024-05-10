@@ -1,6 +1,15 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+#define _TOLERANCE (0.05f)
+#define CULL_OR_NOT true
+#define ORIENT_CULL false
+#define ORIENT_CULL_THRE 0.95f
+#define FRUSTUM_CULL  false
+#define D_MAX 16.0
+#define DIST_N 10
+#define DIST_CULL  true
+#define G  (4.8f)
 #define WORKGROUP_SIZE 32
 layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 
@@ -23,34 +32,133 @@ struct Blade {
 
 // TODO: Add bindings to:
 // 1. Store the input blades
-// 2. Write out the culled blades
-// 3. Write the total number of blades remaining
 
-// The project is using vkCmdDrawIndirect to use a buffer as the arguments for a draw call
-// This is sort of an advanced feature so we've showed you what this buffer should look like
-//
-// layout(set = ???, binding = ???) buffer NumBlades {
-// 	  uint vertexCount;   // Write the number of blades remaining here
-// 	  uint instanceCount; // = 1
-// 	  uint firstVertex;   // = 0
-// 	  uint firstInstance; // = 0
-// } numBlades;
+
+layout(set = 2, binding = 0) buffer Blades {
+    Blade blades[];
+};
+// 2. Write out the culled blades
+layout(set = 2, binding = 1) buffer CulledBlades {
+    Blade culledBlades[];
+};
+
+
+layout(set = 2, binding = 2) buffer NumBlades {
+	  uint vertexCount;  
+	  uint instanceCount; 
+	  uint firstVertex;   
+	  uint firstInstance; 
+} numBlades;
 
 bool inBounds(float value, float bounds) {
     return (value >= -bounds) && (value <= bounds);
 }
 
+bool Frustum(vec3 p) {
+    vec4 p_ast = camera.proj * camera.view * vec4(p, 1.0f);
+    float h = p_ast.w + _TOLERANCE;
+    return inBounds(p_ast.x, h) && inBounds(p_ast.y, h) && inBounds(p_ast.z, h);
+}
+
+vec3 windrand(vec3 w)
+{
+     return (sin(totalTime*w));
+}
+
 void main() {
 	// Reset the number of blades to 0
-	if (gl_GlobalInvocationID.x == 0) {
-		// numBlades.vertexCount = 0;
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx == 0) {
+		numBlades.vertexCount = 0;
 	}
 	barrier(); // Wait till all threads reach this point
 
     // TODO: Apply forces on every blade and update the vertices in the buffer
+	Blade currentBlade = blades[idx];
+
+
+	vec3 v0 = currentBlade.v0.xyz;
+    vec3 v1 = currentBlade.v1.xyz;
+    vec3 v2 = currentBlade.v2.xyz;
+    vec3 up = currentBlade.up.xyz;
+
+
+	float height = currentBlade.v1.w;
+    float stiff  = currentBlade.up.w;
+    float theta  = currentBlade.v0.w;
+
+    vec4 D = vec4(0, -1, 0, G);
+
+    vec3 gE = D.xyz*D.w;
+
+    vec3 T1 = vec3(-1,0,0);
+    T1 = cos(theta)*T1 + sin(theta)*cross(T1, up) + (cos(theta) - 1.0f )*(up.y)*up;
+
+    vec3 T0 = v2 -v0;
+    vec3 f = normalize(cross(T0, T1));
+    
+    vec3 gF = 0.25*G*f;
+
+    vec3 g = gE + gF;
+
+    // recovery
+
+    vec3 rec = (v0 + up*height - v2)*stiff;
+
+
+    //wind
+    vec3  w0 = normalize(windrand(v0)+ _TOLERANCE);
+    float fd = 1.0-dot(w0, normalize(v2-v0));
+    float fr = dot((v2 - v0),up)/height;
+    w0 = fd*fr*w0;
+
+    vec3 deltaF = (rec + g + w0) * deltaTime;
+
+    v2+=deltaF;
+     // State Validation
+    v2 = v2 - up * min(dot(up, v2 - v0), 0);
+
+    float l_proj = length(v2-v0 - up*dot((v2-v0),up));
+
+    v1 = v0 + height*up*max(1 - l_proj/height, 0.05*max(l_proj/height, 1));
+
+    float L_0 = distance(v2, v0);
+    float L_1 = distance(v1, v0) + distance(v2, v1);
+    // n=3, (n-1) =2   2*0.25 =0.5
+    float L = 0.5*(L_0 + L_1);   // cubic bezier curve
+    float ratio = height/L;
+
+
+    v1 = v0 + ratio*(v1 - v0);
+    v2 = v1 + ratio*(v2 - v1);
+
+    blades[idx].v1.xyz = v1.xyz;
+    blades[idx].v2.xyz = v2.xyz;
 
 	// TODO: Cull blades that are too far away or not in the camera frustum and write them
+    if(CULL_OR_NOT)
+    {
+    vec3 camera_pos = inverse(camera.view)[3].xyz;
+    vec3 viewer = v0 - camera_pos - up*dot(v0 - camera_pos, up);
+
+    if (ORIENT_CULL && ORIENT_CULL_THRE < abs(dot(normalize(viewer), T1)))
+            return;
+
+    vec3 m = 0.25*(v0+v2) + 0.5*v1;
+    if(FRUSTUM_CULL&&!Frustum(v0)&&!Frustum(v2)&&!Frustum(m))
+        return;
+
+
+     
+    float d_proj = length(viewer);
+    int n =DIST_N;
+    int upper_n =int(floor(n*(1.0 - d_proj/D_MAX)));
+    if(DIST_CULL && (idx%n)<upper_n)
+        return;
+    }
 	// to the culled blades buffer
 	// Note: to do this, you will need to use an atomic operation to read and update numBlades.vertexCount
 	// You want to write the visible blades to the buffer without write conflicts between threads
+    uint tid  = atomicAdd(numBlades.vertexCount, 1);
+    culledBlades[tid] = blades[idx];
 }

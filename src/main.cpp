@@ -142,11 +142,22 @@ int main() {
     glfwSetWindowSizeCallback(GetGLFWWindow(), resizeCallback);
     glfwSetMouseButtonCallback(GetGLFWWindow(), mouseDownCallback);
     glfwSetCursorPosCallback(GetGLFWWindow(), mouseMoveCallback);
-
+    double current_time = glfwGetTime();
+    double last_time;
+    int frame_count = 0;
     while (!ShouldQuit()) {
         glfwPollEvents();
         scene->UpdateTime();
         renderer->Frame();
+        frame_count += 1;
+        //printf("frame\n");
+        
+        if (((frame_count + 1) % 400) == 0)
+        {
+            last_time = glfwGetTime();
+            double frame_rate = ((double) frame_count) / (last_time-current_time );
+            printf("frame rate %.4f\n", frame_rate);
+        }
     }
 
     vkDeviceWaitIdle(device->GetVkDevice());
